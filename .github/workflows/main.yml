@@ -1,10 +1,3 @@
-Dieser Fehler weist auf ein Problem mit der Syntax in Ihrem Workflow hin. Die Fehlermeldung Unrecognized named-value: 'secrets' an Zeile 42 bedeutet, dass der Workflow versucht, auf ein secrets-Objekt zuzugreifen, das in diesem Kontext nicht erkannt wird.
-Die Zeile, die den Fehler verursacht, ist:
-if: ${{ inputs.use_certificate && secrets.CERTIFICATE != '' }}
-
-Obwohl die secrets in der job-Ebene verfügbar sind, erkennt das if-Statement innerhalb eines step-Kontexts die secrets-Objekte nicht immer direkt.
-Korrigierter Workflow
-Um den Fehler zu beheben, müssen Sie auf die Secrets im Job-Kontext zugreifen, nicht im Step-Kontext. Hier ist der angepasste Workflow, der die korrekte Syntax verwendet. Ich habe die fehlerhafte Zeile in der if-Bedingung korrigiert.
 name: APK-MITM Workflow
 
 on:
