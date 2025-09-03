@@ -1,4 +1,4 @@
-name: Automated MITM APK/APKS
+name: Automated APK/APKS Patch and Release (without Git Tag)
 
 on:
   workflow_dispatch:
@@ -8,6 +8,11 @@ on:
         required: true
       replace_api_key:
         description: 'Replace Google Maps API Key?'
+        required: false
+        default: true
+        type: boolean
+      use_certificate:
+        description: 'Use custom .pem certificate from secret?'
         required: false
         default: true
         type: boolean
@@ -41,17 +46,37 @@ jobs:
       - name: Install apk-mitm globally
         run: npm install -g apk-mitm
 
+      - name: Create certificate file from secret
+        if: ${{ inputs.use_certificate == true }}
+        run: |
+          echo "${{ secrets.CERTIFICATE }}" > certificate.pem
+          echo "Certificate file created from secret."
+        env:
+          CERTIFICATE: ${{ secrets.CERTIFICATE }}
+
       - name: Patch and Modify APK
         id: patch
         run: |
-          apk-mitm ${{ inputs.apk_file_path }} --decompile ${{ inputs.replace_api_key && env.GOOGLE_MAPS_API_KEY != '' && '--replace-google-maps-api-key' || '' }}
+          ARGS=""
+          if [ "${{ inputs.replace_api_key }}" == "true" ] && [ -n "${{ secrets.GOOGLE_MAPS_API_KEY }}" ]; then
+            ARGS="$ARGS --replace-google-maps-api-key"
+            echo "API key replacement enabled."
+          fi
+          
+          if [ "${{ inputs.use_certificate }}" == "true" ] && [ -f "./certificate.pem" ]; then
+            ARGS="$ARGS --certificate ./certificate.pem"
+            echo "Using custom certificate for signing."
+          fi
+          
+          echo "Running apk-mitm with arguments: $ARGS"
+          apk-mitm ${{ inputs.apk_file_path }} $ARGS
         env:
           GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
-
+          
       - name: Find Patched File
         id: find_patched_file
         run: |
-          PATC_FILE=$(find ./apk -maxdepth 1 -name "*-patched.apks" | head -n1)
+          PATC_FILE=$(find . -maxdepth 2 -name "*-patched.apks" | head -n1)
           if [ -z "$PATC_FILE" ]; then
             echo "Error: Patched file not found."
             exit 1
@@ -62,8 +87,9 @@ jobs:
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
-          tag: ${{ inputs.tag }}
+          tag: ""  # Setzt das Tagging auf einen leeren Wert
           name: ${{ inputs.release_name }}
           body: "Automated Release created on ${{ env.GITHUB_RUN_AT }}"
           artifacts: "${{ steps.find_patched_file.outputs.patched_file }}"
           token: ${{ secrets.GITHUB_TOKEN }}
+          
