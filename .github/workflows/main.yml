@@ -1,0 +1,100 @@
+name: APK MITM Workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      use_certificate:
+        description: 'Use certificate for patching'
+        type: boolean
+        default: false
+      replace_api_key:
+        description: 'Replace Google Maps API key'
+        type: boolean
+        default: false
+
+jobs:
+  patch-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Install apk-mitm
+        run: npm install -g apk-mitm
+
+      - name: Prepare certificate if input checked and secret exists
+        if: ${{ inputs.use_certificate && secrets.CERTIFICATE != '' }}
+        run: |
+          echo "${{ secrets.CERTIFICATE }}" > certificate.pem
+          echo "Certificate prepared"
+
+      - name: Patch APK / XAPK / APKS with apk-mitm
+        run: |
+          cd apk
+          ARGS=""
+
+          # Certificate
+          if [ "${{ inputs.use_certificate }}" == "true" ] && [ -f "../certificate.pem" ]; then
+            ARGS="$ARGS --certificate ../certificate.pem"
+            echo "Using certificate.pem"
+          fi
+
+          # Custom apktool
+          if [ -d "../apktool" ]; then
+            APKTOOL_JAR=$(find ../apktool -maxdepth 1 -name "*.jar" | head -n1)
+            if [ -n "$APKTOOL_JAR" ]; then
+              ARGS="$ARGS --apktool $APKTOOL_JAR"
+              echo "Using custom apktool: $APKTOOL_JAR"
+            fi
+          fi
+
+          echo "Running apk-mitm with args: $ARGS"
+          apk-mitm *.{apk,xapk,apks} $ARGS || true
+          mv *-patched.apk ../patched.apk || echo "No patched APK found"
+          cd ..
+
+      - name: Replace Google Maps API Key if input checked and secret exists
+        if: ${{ inputs.replace_api_key && secrets.GOOGLE_MAPS_API_KEY != '' }}
+        run: |
+          APK_DIR=$(find . -type d -name "*-patched" -maxdepth 1)
+          if [ -n "$APK_DIR" ]; then
+            echo "Replacing Google Maps API key..."
+            if grep -q 'com.google.android.geo.API_KEY' "$APK_DIR/AndroidManifest.xml"; then
+              sed -i "s|<meta-data android:name=\"com.google.android.geo.API_KEY\" android:value=\"[^\"]*\"|<meta-data android:name=\"com.google.android.geo.API_KEY\" android:value=\"${{ secrets.GOOGLE_MAPS_API_KEY }}\"|" "$APK_DIR/AndroidManifest.xml"
+            else
+              STRINGS_FILE=$(find "$APK_DIR/res" -name "strings.xml" | head -n1)
+              if [ -f "$STRINGS_FILE" ]; then
+                sed -i "s|<string name=\"google_maps_key\">[^<]*</string>|<string name=\"google_maps_key\">${{ secrets.GOOGLE_MAPS_API_KEY }}</string>|" "$STRINGS_FILE"
+              fi
+            fi
+            # Rebuild APK nach API-Key-Update
+            apk-mitm "$APK_DIR"/*.{apk,xapk,apks} $ARGS || true
+            mv "$APK_DIR"/*-patched.apk patched.apk || echo "No patched APK found after API key replacement"
+          fi
+
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "patched.apk"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: v${{ github.run_number }}
+          name: Patched APK v${{ github.run_number }}
+          body: |
+            Automated patched APK with apk-mitm
+            - Certificate used: ${{ inputs.use_certificate && secrets.CERTIFICATE != '' && 'yes' || 'no' }}
+            - Custom Apktool used: ${{ (hashFiles('apktool/*.jar') != '') && 'yes' || 'no' }}
+            - Google Maps API Key replaced: ${{ inputs.replace_api_key && secrets.GOOGLE_MAPS_API_KEY != '' && 'yes' || 'no' }}
+          allowUpdates: true
+          artifactContentType: application/vnd.android.package-archive
