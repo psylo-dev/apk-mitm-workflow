@@ -6,15 +6,17 @@ on:
       apk_file_path:
         description: 'Path to the APK/APKS file in the "apk/" folder (e.g., "apk/app.apks")'
         required: true
+        default: 'apk/ZEUS_9.40.apks'
+
       replace_api_key:
         description: 'Replace Google Maps API Key?'
         required: false
-        default: true
+        default: false
         type: boolean
       use_certificate:
         description: 'Use custom .pem certificate from secret?'
         required: false
-        default: true
+        default: false
         type: boolean
       release_name:
         description: 'GitHub Release Name'
@@ -87,7 +89,6 @@ jobs:
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
-          tag: ""  # Setzt das Tagging auf einen leeren Wert
           name: ${{ inputs.release_name }}
           body: "Automated Release created on ${{ env.GITHUB_RUN_AT }}"
           artifacts: "${{ steps.find_patched_file.outputs.patched_file }}"
