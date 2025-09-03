@@ -1,3 +1,10 @@
+Dieser Fehler weist auf ein Problem mit der Syntax in Ihrem Workflow hin. Die Fehlermeldung Unrecognized named-value: 'secrets' an Zeile 42 bedeutet, dass der Workflow versucht, auf ein secrets-Objekt zuzugreifen, das in diesem Kontext nicht erkannt wird.
+Die Zeile, die den Fehler verursacht, ist:
+if: ${{ inputs.use_certificate && secrets.CERTIFICATE != '' }}
+
+Obwohl die secrets in der job-Ebene verfügbar sind, erkennt das if-Statement innerhalb eines step-Kontexts die secrets-Objekte nicht immer direkt.
+Korrigierter Workflow
+Um den Fehler zu beheben, müssen Sie auf die Secrets im Job-Kontext zugreifen, nicht im Step-Kontext. Hier ist der angepasste Workflow, der die korrekte Syntax verwendet. Ich habe die fehlerhafte Zeile in der if-Bedingung korrigiert.
 name: APK-MITM Workflow
 
 on:
@@ -19,6 +26,9 @@ on:
 jobs:
   patch-and-release:
     runs-on: ubuntu-latest
+    env:
+      GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+      CERTIFICATE: ${{ secrets.CERTIFICATE }}
 
     steps:
       - name: Checkout repository
@@ -39,9 +49,9 @@ jobs:
         run: npm install -g apk-mitm
 
       - name: Prepare certificate if input checked
-        if: ${{ inputs.use_certificate && secrets.CERTIFICATE != '' }}
+        if: ${{ inputs.use_certificate && env.CERTIFICATE != '' }}
         run: |
-          echo "${{ secrets.CERTIFICATE }}" > certificate.pem
+          echo "${{ env.CERTIFICATE }}" > certificate.pem
           echo "Certificate prepared"
 
       - name: Patch APK with apk-mitm and apply changes
@@ -70,15 +80,15 @@ jobs:
           DECOMPILED_DIR=$(find . -type d -name "*-patched" -maxdepth 1)
           if [ -n "$DECOMPILED_DIR" ]; then
             # API Key ersetzen, falls ausgewählt
-            if [ "${{ inputs.replace_api_key }}" == "true" ] && [ "${{ secrets.GOOGLE_MAPS_API_KEY }}" != "" ]; then
+            if [ "${{ inputs.replace_api_key }}" == "true" ] && [ "${{ env.GOOGLE_MAPS_API_KEY }}" != "" ]; then
               echo "Replacing Google Maps API key..."
               
               if grep -q 'com.google.android.geo.API_KEY' "$DECOMPILED_DIR/AndroidManifest.xml"; then
-                sed -i "s|<meta-data android:name=\"com.google.android.geo.API_KEY\" android:value=\"[^\"]*\"|<meta-data android:name=\"com.google.android.geo.API_KEY\" android:value=\"${{ secrets.GOOGLE_MAPS_API_KEY }}\"|" "$DECOMPILED_DIR/AndroidManifest.xml"
+                sed -i "s|<meta-data android:name=\"com.google.android.geo.API_KEY\" android:value=\"[^\"]*\"|<meta-data android:name=\"com.google.android.geo.API_KEY\" android:value=\"${{ env.GOOGLE_MAPS_API_KEY }}\"|" "$DECOMPILED_DIR/AndroidManifest.xml"
               else
                 STRINGS_FILE=$(find "$DECOMPILED_DIR/res" -name "strings.xml" | head -n1)
                 if [ -f "$STRINGS_FILE" ]; then
-                  sed -i "s|<string name=\"google_maps_key\">[^<]*</string>|<string name=\"google_maps_key\">${{ secrets.GOOGLE_MAPS_API_KEY }}</string>|" "$STRINGS_FILE"
+                  sed -i "s|<string name=\"google_maps_key\">[^<]*</string>|<string name=\"google_maps_key\">${{ env.GOOGLE_MAPS_API_KEY }}</string>|" "$STRINGS_FILE"
                 fi
               fi
             fi
@@ -101,9 +111,9 @@ jobs:
           name: Patched APK v${{ github.run_number }}
           body: |
             Automated patched APK with apk-mitm
-            - Certificate used: ${{ inputs.use_certificate && secrets.CERTIFICATE != '' && 'yes' || 'no' }}
+            - Certificate used: ${{ inputs.use_certificate && env.CERTIFICATE != '' && 'yes' || 'no' }}
             - Custom Apktool used: ${{ inputs.use_custom_apktool && (hashFiles('jars/*.jar') != '') && 'yes' || 'no' }}
-            - Google Maps API Key replaced: ${{ inputs.replace_api_key && secrets.GOOGLE_MAPS_API_KEY != '' && 'yes' || 'no' }}
+            - Google Maps API Key replaced: ${{ inputs.replace_api_key && env.GOOGLE_MAPS_API_KEY != '' && 'yes' || 'no' }}
           allowUpdates: true
           artifactContentType: application/vnd.android.package-archive
 
