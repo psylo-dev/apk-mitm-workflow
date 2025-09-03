@@ -47,7 +47,7 @@ jobs:
           echo "${{ env.CERTIFICATE }}" > certificate.pem
           echo "Certificate prepared"
 
-      - name: Patch APK with apk-mitm and apply changes
+      - name: Patch APK/APKS with apk-mitm and apply changes
         run: |
           cd apk
           ARGS=""
@@ -74,9 +74,10 @@ jobs:
             echo "Using certificate.pem"
           fi
           
-          # Dekompilieren der APK mit dem genauen Dateinamen
-          apk-mitm "$APK_FILE" --decompile || true
+          # Dekompilieren der APK/APKS
+          apk-mitm "$APK_FILE" --decompile $ARGS || true
           
+          # Findet das dekompilierte Verzeichnis
           DECOMPILED_DIR=$(find . -type d -name "*-patched" -maxdepth 1)
           if [ -n "$DECOMPILED_DIR" ]; then
             # API Key ersetzen, falls ausgewählt
@@ -95,17 +96,17 @@ jobs:
             
             # Neu kompilieren und signieren
             apk-mitm "$DECOMPILED_DIR" $ARGS || true
-            mv "$DECOMPILED_DIR"/*.apk ../patched.apk || echo "No patched APK found"
+            mv "$DECOMPILED_DIR"/*-patched.apks ../patched.apks || echo "No patched APKS found"
           else
             echo "No decompiled directory found. Skipping API key replacement and repackaging."
           fi
           cd ..
 
       - name: Create GitHub Release
-        if: ${{ success() && hashFiles('patched.apk') != '' }}
+        if: ${{ success() && hashFiles('patched.apks') != '' }}
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "patched.apk"
+          artifacts: "patched.apks"
           token: ${{ secrets.GITHUB_TOKEN }}
           tag: v${{ github.run_number }}
           name: Patched APK v${{ github.run_number }}
