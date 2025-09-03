@@ -27,9 +27,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: List files in apk/ directory
-        run: ls -al apk/
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -55,6 +52,13 @@ jobs:
           cd apk
           ARGS=""
           
+          # Findet die APK/XAPK/APKS-Datei und speichert den Namen
+          APK_FILE=$(find . -maxdepth 1 -type f -name "*.apk" -o -name "*.xapk" -o -name "*.apks" | head -n1)
+          if [ -z "$APK_FILE" ]; then
+            echo "Error: No APK, XAPK, or APKS file found in the 'apk/' directory."
+            exit 1
+          fi
+
           # Apktool-Pfad nur hinzufügen, wenn die Checkbox aktiviert ist
           if [ "${{ inputs.use_custom_apktool }}" == "true" ]; then
             APKTOOL_JAR=$(find ../jars -maxdepth 1 -name "apktool*.jar" | head -n1)
@@ -70,8 +74,8 @@ jobs:
             echo "Using certificate.pem"
           fi
           
-          # Dekompilieren der APK
-          apk-mitm *.{apk,xapk,apks} --decompile || true
+          # Dekompilieren der APK mit dem genauen Dateinamen
+          apk-mitm "$APK_FILE" --decompile || true
           
           DECOMPILED_DIR=$(find . -type d -name "*-patched" -maxdepth 1)
           if [ -n "$DECOMPILED_DIR" ]; then
