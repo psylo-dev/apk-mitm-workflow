@@ -1,4 +1,4 @@
-name: Automated APK/APKS Patch and Upload Artifact
+name: APK-MITM auto-workflow
 
 on:
   workflow_dispatch:
@@ -6,20 +6,22 @@ on:
       apk_file_path:
         description: 'Path to the APK/APKS file in the "apk/" folder (e.g., "apk/app.apks")'
         required: true
+        default: 'apk/ZEUS_9.40.apks'
+
       replace_api_key:
         description: 'Replace Google Maps API Key?'
         required: false
-        default: true
+        default: false
         type: boolean
       use_certificate:
         description: 'Use custom .pem certificate from secret?'
         required: false
-        default: true
+        default: false
         type: boolean
       release_name:
         description: 'GitHub Release Name'
         required: false
-        default: 'Automated Release'
+        default: 'Auto-Release'
 
 jobs:
   patch-and-upload:
