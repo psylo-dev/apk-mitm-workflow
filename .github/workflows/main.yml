@@ -27,6 +27,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: List files in apk/ directory
+        run: ls -al apk/
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
