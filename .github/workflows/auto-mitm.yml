@@ -1,0 +1,88 @@
+name: APK MITM Workflow
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      use_certificate:
+        description: 'Use --certificate flag with provided certificate'
+        type: boolean
+        default: false
+      replace_api_key:
+        description: 'Replace Google Maps API key if provided'
+        type: boolean
+        default: false
+
+jobs:
+  patch-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Install apk-mitm
+        run: npm install -g apk-mitm
+
+      - name: Check for certificate secret and save to file
+        env:
+          CERTIFICATE_CONTENT: ${{ secrets.CERTIFICATE_PATH }}
+        run: |
+          if [ -n "$CERTIFICATE_CONTENT" ]; then
+            echo "Certificate secret found, saving to certificate.pem"
+            echo "$CERTIFICATE_CONTENT" > certificate.pem
+          else
+            echo "No certificate secret provided"
+          fi
+
+      - name: Patch APK
+        run: |
+          cd apk
+          ARGS=""
+          if [ "${{ github.event.inputs.use_certificate }}" == "true" ] && [ -f "../certificate.pem" ]; then
+            ARGS="$ARGS --certificate ../certificate.pem"
+          fi
+          apk-mitm *.apk $ARGS
+          mv *-patched.apk ../patched.apk
+          cd ..
+
+      - name: Replace Google Maps API Key
+        if: ${{ github.event.inputs.replace_api_key == 'true' && secrets.GOOGLE_MAPS_API_KEY }}
+        run: |
+          APK_DIR=$(find . -type d -name "*-patched" -maxdepth 1)
+          if [ -n "$APK_DIR" ] && [ -f "$APK_DIR/AndroidManifest.xml" ]; then
+            echo "Replacing Google Maps API key in AndroidManifest.xml"
+            sed -i "s|<meta-data android:name=\"com.google.android.geo.API_KEY\" android:value=\"[^\"]*\"|<meta-data android:name=\"com.google.android.geo.API_KEY\" android:value=\"${{ secrets.GOOGLE_MAPS_API_KEY }}\"|" "$APK_DIR/AndroidManifest.xml"
+            echo "Re-encoding APK after API key replacement"
+            apktool b "$APK_DIR" -o patched.apk
+            java -jar $(find /usr -name uber-apk-signer*.jar) --apks patched.apk --overwrite
+          else
+            echo "No patched APK directory or AndroidManifest.xml found, skipping API key replacement"
+          fi
+
+      - name: Create and Upload Release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "patched.apk"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: v${{ github.run_number }}
+          name: Automated Patched APK Release ${{ github.run_number }}
+          body: |
+            Automatically patched APK using apk-mitm with args:
+            - ${{ github.event.inputs.use_certificate && '--certificate' || '' }}
+            - ${{ github.event.inputs.replace_api_key && 'Replaced Google Maps API key' || '' }}
+          allowUpdates: true
+          artifactContentType: application/vnd.android.package-archive
