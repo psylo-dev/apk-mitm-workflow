@@ -1,0 +1,69 @@
+name: Automated MITM APK/APKS
+
+on:
+  workflow_dispatch:
+    inputs:
+      apk_file_path:
+        description: 'Path to the APK/APKS file in the "apk/" folder (e.g., "apk/app.apks")'
+        required: true
+      replace_api_key:
+        description: 'Replace Google Maps API Key?'
+        required: false
+        default: true
+        type: boolean
+      release_name:
+        description: 'GitHub Release Name'
+        required: false
+        default: 'Automated Release'
+
+jobs:
+  patch-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Install apk-mitm globally
+        run: npm install -g apk-mitm
+
+      - name: Patch and Modify APK
+        id: patch
+        run: |
+          apk-mitm ${{ inputs.apk_file_path }} --decompile ${{ inputs.replace_api_key && env.GOOGLE_MAPS_API_KEY != '' && '--replace-google-maps-api-key' || '' }}
+        env:
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+
+      - name: Find Patched File
+        id: find_patched_file
+        run: |
+          PATC_FILE=$(find ./apk -maxdepth 1 -name "*-patched.apks" | head -n1)
+          if [ -z "$PATC_FILE" ]; then
+            echo "Error: Patched file not found."
+            exit 1
+          fi
+          echo "Patched file found: $PATC_FILE"
+          echo "patched_file=$PATC_FILE" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ inputs.tag }}
+          name: ${{ inputs.release_name }}
+          body: "Automated Release created on ${{ env.GITHUB_RUN_AT }}"
+          artifacts: "${{ steps.find_patched_file.outputs.patched_file }}"
+          token: ${{ secrets.GITHUB_TOKEN }}
