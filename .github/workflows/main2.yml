@@ -1,4 +1,4 @@
-name: Automated APK/APKS Patch and Release (without Git Tag)
+name: Automated APK/APKS Patch and Upload Artifact
 
 on:
   workflow_dispatch:
@@ -6,17 +6,15 @@ on:
       apk_file_path:
         description: 'Path to the APK/APKS file in the "apk/" folder (e.g., "apk/app.apks")'
         required: true
-        default: 'apk/ZEUS_9.40.apks'
-
       replace_api_key:
         description: 'Replace Google Maps API Key?'
         required: false
-        default: false
+        default: true
         type: boolean
       use_certificate:
         description: 'Use custom .pem certificate from secret?'
         required: false
-        default: false
+        default: true
         type: boolean
       release_name:
         description: 'GitHub Release Name'
@@ -24,7 +22,7 @@ on:
         default: 'Automated Release'
 
 jobs:
-  patch-and-release:
+  patch-and-upload:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -86,11 +84,19 @@ jobs:
           echo "Patched file found: $PATC_FILE"
           echo "patched_file=$PATC_FILE" >> $GITHUB_OUTPUT
 
-      - name: Create Release
+      - name: Create Draft Release
         uses: ncipollo/release-action@v1
         with:
-          name: ${{ inputs.release_name }}
-          body: "Automated Release created on ${{ env.GITHUB_RUN_AT }}"
+          # A unique tag is not required for a draft release
+          tag: 'v-draft-${{ github.run_id }}'
+          name: ${{ inputs.release_name }} - Draft
+          body: "This is a draft release created by a workflow without a Git tag. Please publish it manually."
           artifacts: "${{ steps.find_patched_file.outputs.patched_file }}"
           token: ${{ secrets.GITHUB_TOKEN }}
-          
+          draft: true  # This creates a draft release that does not need a tag to be published immediately
+
+      - name: Upload as Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: patched-apks
+          path: ${{ steps.find_patched_file.outputs.patched_file }}
