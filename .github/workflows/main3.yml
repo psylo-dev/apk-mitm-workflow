@@ -27,7 +27,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq zip git python3-venv python3-pip
+          sudo apt-get install -y jq zip git python3-venv python3-pip openjdk-17-jdk unzip wget
 
       - name: Install APKLeaks from GitHub
         run: |
@@ -41,8 +41,7 @@ jobs:
       - name: Validate APK Path
         run: |
           APK_FILE="${{ inputs.apk_path }}"
-          # Backslashes durch Slashes ersetzen
-          APK_FILE="${APK_FILE//\\//}"
+          APK_FILE="${APK_FILE//\\//}"   # Windows Backslash → Slash
           if [ ! -f "$APK_FILE" ]; then
             echo "Error: APK file not found: $APK_FILE"
             exit 1
@@ -55,7 +54,6 @@ jobs:
           APK_FILE="${{ inputs.apk_path }}"
           APK_FILE="${APK_FILE//\\//}"
           APK_NAME=$(basename "$APK_FILE" .apk)
-          # Sonderzeichen in Name ersetzen für Ordner/ZIP
           SAFE_NAME=$(echo "$APK_NAME" | sed 's/[^A-Za-z0-9._-]/_/g')
           DATE=$(date +'%Y-%m-%d_%H-%M')
           VERSION="run-${GITHUB_RUN_NUMBER}"
@@ -63,7 +61,8 @@ jobs:
           mkdir -p "$OUTPUT_DIR"
 
           echo "Scanning $APK_FILE ..."
-          python /tmp/apkleaks/apkleaks.py -f "$APK_FILE" -o "$OUTPUT_DIR/apkleaks.json" || true
+          # Auto-download JADX if missing (non-interactive)
+          yes | python /tmp/apkleaks/apkleaks.py -f "$APK_FILE" -o "$OUTPUT_DIR/apkleaks.json" || true
 
           # HTML-Report mit jq
           HTML_FILE="${OUTPUT_DIR}/${SAFE_NAME}_${DATE}_${VERSION}_report.html"
