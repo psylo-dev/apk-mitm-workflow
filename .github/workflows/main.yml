@@ -179,6 +179,29 @@ jobs:
           chmod 644 "${{ inputs.so_file_path }}"
           echo "Verified .so file: ${{ inputs.so_file_path }}"
 
+      - name: Create Ghidra Decompiler Script
+        run: |
+          cat > decompile.py << 'EOF'
+#!/usr/bin/env python
+from ghidra.app.decompiler import DecompInterface
+from ghidra.util.task import ConsoleTaskMonitor
+import ghidra.program.model.listing
+def run():
+    program = getCurrentProgram()
+    decomp = DecompInterface()
+    decomp.openProgram(program)
+    monitor = ConsoleTaskMonitor()
+    functions = program.getFunctionManager().getFunctions(True)
+    with open("/github/workspace/output/out_ghidra.c", "w") as f:
+        for func in functions:
+            result = decomp.decompileFunction(func, 60, monitor)
+            if result.decompileCompleted():
+                f.write(result.getDecompiledFunction().getC() + "\n")
+run()
+EOF
+          chmod +x decompile.py
+          echo "Created Ghidra decompiler script: decompile.py"
+
       - name: Run Ghidra Decompiler (Fallback)
         run: |
           if [ "${{ inputs.decompiler_choice }}" = "decompile" ]; then
@@ -189,31 +212,9 @@ jobs:
           fi
           if [ "$DECOMPILER" = "ghidra" ]; then
             /usr/local/ghidra/ghidraRun --help
-            echo -e '#!/usr/bin/env python\n\
-from ghidra.app.decompiler import DecompInterface\n\
-from ghidra.util.task import ConsoleTaskMonitor\n\
-import ghidra.program.model.listing\n\
-def run():\n\
-    program = getCurrentProgram()\n\
-    decomp = DecompInterface()\n\
-    decomp.openProgram(program)\n\
-    monitor = ConsoleTaskMonitor()\n\
-    functions = program.getFunctionManager().getFunctions(True)\n\
-    with open("/github/workspace/output/out_ghidra.c", "w") as f:\n\
-        for func in functions:\n\
-            result = decomp.decompileFunction(func, 60, monitor)\n\
-            if result.decompileCompleted():\n\
-                f.write(result.getDecompiledFunction().getC() + "\\n")\n\
-run()' > decompile.py
             /usr/local/ghidra/ghidraRun -noix -script decompile.py -process "${{ inputs.so_file_path }}"
           elif [ "$DECOMPILER" = "angr" ]; then
-            echo -e 'import angr\n\
-project = angr.Project("${{ inputs.so_file_path }}", auto_load_libs=False)\n\
-cfg = project.analyses.CFGFast()\n\
-with open("output/out_angr.c", "w") as f:\n\
-    for func in cfg.functions.values():\n\
-        f.write(f"// Function at {func.addr}\\n")\n\
-        f.write(f"// Decompilation not fully supported in this fallback\\n")' > angr_decompile.py
+            echo -e 'import angr\nproject = angr.Project("${{ inputs.so_file_path }}", auto_load_libs=False)\ncfg = project.analyses.CFGFast()\nwith open("output/out_angr.c", "w") as f:\n    for func in cfg.functions.values():\n        f.write(f"// Function at {func.addr}\\n")\n        f.write(f"// Decompilation not fully supported in this fallback\\n")' > angr_decompile.py
             python angr_decompile.py
           fi
           echo "Fallback decompilation completed."
