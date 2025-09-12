@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       so_file_path:
-        description: 'Path to the .so file in the "uploads/" folder (e.g., "uploads/sample_libnative-lib.so")'
+        description: 'Path to the .so file in the repository root (e.g., "liberos.so")'
         required: true
-        default: 'eros.so'
+        default: 'liberos.so'
       decompiler_choice:
         description: 'Decompiler to use (ghidra, angr, or decompile for both)'
         required: true
@@ -22,11 +22,14 @@ on:
         default: 'Auto-Decompiled-Release'
 
 jobs:
-  decompile-and-upload:
+  decompile-docker:
     runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: read
+    outputs:
+      status: ${{ steps.set_status.outputs.status }}
+      zip_file: ${{ steps.package_files.outputs.zip_file }}
 
     steps:
       - name: Checkout Repository
@@ -35,58 +38,232 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Create uploads and output directories
+      - name: Create output directory
         run: |
-          mkdir -p uploads
           mkdir -p output
-          echo "Created uploads and output directories."
+          chmod -R 777 output
+          echo "Created output directory."
 
-      - name: Copy .so file to uploads directory
+      - name: Verify .so file exists
         run: |
           if [ ! -f "${{ inputs.so_file_path }}" ]; then
             echo "Error: .so file not found at ${{ inputs.so_file_path }}"
             exit 1
           fi
-          cp "${{ inputs.so_file_path }}" uploads/
-          echo "Copied .so file to uploads/"
+          chmod 644 "${{ inputs.so_file_path }}"
+          echo "Verified .so file: ${{ inputs.so_file_path }}"
 
       - name: Run SO Decompiler
+        id: decompile
         run: |
           ARGS="${{ inputs.decompiler_choice }}"
           echo "Running so_decompiler with decompiler: $ARGS"
           docker run --platform=linux/amd64 \
-            -v $(pwd)/uploads:/decompile/uploads \
+            -v $(pwd)/${{ inputs.so_file_path }}:/decompile/uploads/$(basename "${{ inputs.so_file_path }}") \
             -v $(pwd)/output:/decompile/output \
+            --user $(id -u):$(id -g) \
             devrvk/so-decompiler:latest \
             $ARGS /decompile/uploads/$(basename "${{ inputs.so_file_path }}") /decompile/output
         env:
           DOCKER_DEFAULT_PLATFORM: linux/amd64
+        continue-on-error: true
 
-      - name: Find Decompiled Files
-        id: find_decompiled_files
+      - name: Debug Output Files
         run: |
-          DECOMPILED_FILES=$(find ./output -type f \( -name "*.c" -o -name "*.h" \) | tr '\n' ',')
-          if [ -z "$DECOMPILED_FILES" ]; then
-            echo "Error: No decompiled files found in output directory."
+          echo "Listing files in output directory:"
+          ls -la ./output
+          echo "Checking file permissions:"
+          stat ./output/* 2>/dev/null || echo "No files found in output/"
+
+      - name: Package Decompiled Files into ZIP
+        id: package_files
+        run: |
+          if [ -z "$(ls ./output/*.c 2>/dev/null)" ] && [ -z "$(ls ./output/*.h 2>/dev/null)" ]; then
+            echo "Warning: No decompiled files (.c or .h) found in output directory."
+            echo "status=failure" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          zip -j decompiled-files.zip ./output/*.c ./output/*.h 2>/dev/null || echo "Warning: Some files may not exist."
+          chmod 644 decompiled-files.zip
+          echo "Zipped decompiled files into decompiled-files.zip"
+          echo "zip_file=$(pwd)/decompiled-files.zip" >> $GITHUB_OUTPUT
+          echo "status=success" >> $GITHUB_OUTPUT
+        env:
+          ZIP_FILE_NAME: decompiled-files.zip
+
+      - name: Set Status
+        id: set_status
+        run: |
+          echo "status=${{ steps.package_files.outputs.status || 'failure' }}" >> $GITHUB_OUTPUT
+
+      - name: Create Draft Release
+        if: steps.package_files.outputs.status == 'success'
+        uses: ncipollo/release-action@v1
+        with:
+          tag: 'v-draft-${{ github.run_id }}-docker'
+          name: ${{ inputs.release_name }} - Draft (Docker)
+          body: "This is a draft release containing decompiled files from ${{ inputs.so_file_path }} using ${{ inputs.decompiler_choice }} (Docker). Please publish it manually."
+          artifacts: "${{ steps.package_files.outputs.zip_file }}"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          draft: true
+          generateReleaseNotes: false
+          immutableCreate: false
+          makeLatest: legacy
+          omitBody: false
+          omitBodyDuringUpdate: false
+          omitDraftDuringUpdate: false
+          omitName: false
+          omitNameDuringUpdate: false
+          omitPrereleaseDuringUpdate: false
+          removeArtifacts: false
+          replacesArtifacts: true
+          skipIfReleaseExists: false
+          updateOnlyUnreleased: false
+
+      - name: Upload ZIP as Workflow Artifact
+        if: steps.package_files.outputs.status == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: decompiled-files-zip-docker
+          path: ${{ steps.package_files.outputs.zip_file }}
+
+  decompile-fallback:
+    runs-on: ubuntu-latest
+    needs: decompile-docker
+    if: needs.decompile-docker.outputs.status != 'success'
+    permissions:
+      contents: write
+      packages: read
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip build-essential
+          pip install angr
+          echo "Installed Angr and dependencies."
+
+      - name: Download and Install Ghidra
+        run: |
+          wget https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_11.1.2_build/ghidra_11.1.2_PUBLIC_20240709.zip
+          unzip ghidra_11.1.2_PUBLIC_20240709.zip
+          mv ghidra_11.1.2_PUBLIC /usr/local/ghidra
+          echo "Ghidra installed at /usr/local/ghidra"
+
+      - name: Create output directory
+        run: |
+          mkdir -p output
+          chmod -R 777 output
+          echo "Created output directory."
+
+      - name: Verify .so file exists
+        run: |
+          if [ ! -f "${{ inputs.so_file_path }}" ]; then
+            echo "Error: .so file not found at ${{ inputs.so_file_path }}"
             exit 1
           fi
-          echo "Decompiled files found: $DECOMPILED_FILES"
-          echo "decompiled_files=$DECOMPILED_FILES" >> $GITHUB_OUTPUT
+          chmod 644 "${{ inputs.so_file_path }}"
+          echo "Verified .so file: ${{ inputs.so_file_path }}"
+
+      - name: Run Ghidra Decompiler (Fallback)
+        run: |
+          if [ "${{ inputs.decompiler_choice }}" = "decompile" ]; then
+            echo "Warning: 'decompile' mode not supported in fallback, using ghidra instead."
+            DECOMPILER="ghidra"
+          else
+            DECOMPILER="${{ inputs.decompiler_choice }}"
+          fi
+          if [ "$DECOMPILER" = "ghidra" ]; then
+            /usr/local/ghidra/ghidraRun --help
+            echo -e '#!/usr/bin/env python\n\
+from ghidra.app.decompiler import DecompInterface\n\
+from ghidra.util.task import ConsoleTaskMonitor\n\
+import ghidra.program.model.listing\n\
+def run():\n\
+    program = getCurrentProgram()\n\
+    decomp = DecompInterface()\n\
+    decomp.openProgram(program)\n\
+    monitor = ConsoleTaskMonitor()\n\
+    functions = program.getFunctionManager().getFunctions(True)\n\
+    with open("/github/workspace/output/out_ghidra.c", "w") as f:\n\
+        for func in functions:\n\
+            result = decomp.decompileFunction(func, 60, monitor)\n\
+            if result.decompileCompleted():\n\
+                f.write(result.getDecompiledFunction().getC() + "\\n")\n\
+run()' > decompile.py
+            /usr/local/ghidra/ghidraRun -noix -script decompile.py -process "${{ inputs.so_file_path }}"
+          elif [ "$DECOMPILER" = "angr" ]; then
+            echo -e 'import angr\n\
+project = angr.Project("${{ inputs.so_file_path }}", auto_load_libs=False)\n\
+cfg = project.analyses.CFGFast()\n\
+with open("output/out_angr.c", "w") as f:\n\
+    for func in cfg.functions.values():\n\
+        f.write(f"// Function at {func.addr}\\n")\n\
+        f.write(f"// Decompilation not fully supported in this fallback\\n")' > angr_decompile.py
+            python angr_decompile.py
+          fi
+          echo "Fallback decompilation completed."
+
+      - name: Debug Output Files
+        run: |
+          echo "Listing files in output directory:"
+          ls -la ./output
+          echo "Checking file permissions:"
+          stat ./output/* 2>/dev/null || echo "No files found in output/"
+
+      - name: Package Decompiled Files into ZIP
+        id: package_files
+        run: |
+          if [ -z "$(ls ./output/*.c 2>/dev/null)" ] && [ -z "$(ls ./output/*.h 2>/dev/null)" ]; then
+            echo "Error: No decompiled files (.c or .h) found in output directory."
+            exit 1
+          fi
+          zip -j decompiled-files-fallback.zip ./output/*.c ./output/*.h 2>/dev/null || echo "Warning: Some files may not exist."
+          chmod 644 decompiled-files-fallback.zip
+          echo "Zipped decompiled files into decompiled-files-fallback.zip"
+          echo "zip_file=$(pwd)/decompiled-files-fallback.zip" >> $GITHUB_OUTPUT
+        env:
+          ZIP_FILE_NAME: decompiled-files-fallback.zip
 
       - name: Create Draft Release
         uses: ncipollo/release-action@v1
         with:
-          tag: 'v-draft-${{ github.run_id }}'
-          name: ${{ inputs.release_name }} - Draft
-          body: "This is a draft release containing decompiled files from ${{ inputs.so_file_path }} using ${{ inputs.decompiler_choice }}. Please publish it manually."
-          artifacts: "${{ steps.find_decompiled_files.outputs.decompiled_files }}"
+          tag: 'v-draft-${{ github.run_id }}-fallback'
+          name: ${{ inputs.release_name }} - Draft (Fallback)
+          body: "This is a draft release containing decompiled files from ${{ inputs.so_file_path }} using ${{ inputs.decompiler_choice }} (Fallback, no Docker). Please publish it manually."
+          artifacts: "${{ steps.package_files.outputs.zip_file }}"
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: true
+          generateReleaseNotes: false
+          immutableCreate: false
+          makeLatest: legacy
+          omitBody: false
+          omitBodyDuringUpdate: false
+          omitDraftDuringUpdate: false
+          omitName: false
+          omitNameDuringUpdate: false
+          omitPrereleaseDuringUpdate: false
+          removeArtifacts: false
+          replacesArtifacts: true
+          skipIfReleaseExists: false
+          updateOnlyUnreleased: false
 
-      - name: Upload as Workflow Artifact
+      - name: Upload ZIP as Workflow Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: decompiled-files
-          path: |
-            output/*.c
-            output/*.h
+          name: decompiled-files-zip-fallback
+          path: ${{ steps.package_files.outputs.zip_file }}
