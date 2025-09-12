@@ -1,0 +1,92 @@
+name: SO Decompiler Workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      so_file_path:
+        description: 'Path to the .so file in the "uploads/" folder (e.g., "uploads/sample_libnative-lib.so")'
+        required: true
+        default: 'eros.so'
+      decompiler_choice:
+        description: 'Decompiler to use (ghidra, angr, or decompile for both)'
+        required: true
+        default: 'ghidra'
+        type: choice
+        options:
+          - ghidra
+          - angr
+          - decompile
+      release_name:
+        description: 'GitHub Release Name'
+        required: false
+        default: 'Auto-Decompiled-Release'
+
+jobs:
+  decompile-and-upload:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create uploads and output directories
+        run: |
+          mkdir -p uploads
+          mkdir -p output
+          echo "Created uploads and output directories."
+
+      - name: Copy .so file to uploads directory
+        run: |
+          if [ ! -f "${{ inputs.so_file_path }}" ]; then
+            echo "Error: .so file not found at ${{ inputs.so_file_path }}"
+            exit 1
+          fi
+          cp "${{ inputs.so_file_path }}" uploads/
+          echo "Copied .so file to uploads/"
+
+      - name: Run SO Decompiler
+        run: |
+          ARGS="${{ inputs.decompiler_choice }}"
+          echo "Running so_decompiler with decompiler: $ARGS"
+          docker run --platform=linux/amd64 \
+            -v $(pwd)/uploads:/decompile/uploads \
+            -v $(pwd)/output:/decompile/output \
+            devrvk/so-decompiler:latest \
+            $ARGS /decompile/uploads/$(basename "${{ inputs.so_file_path }}") /decompile/output
+        env:
+          DOCKER_DEFAULT_PLATFORM: linux/amd64
+
+      - name: Find Decompiled Files
+        id: find_decompiled_files
+        run: |
+          DECOMPILED_FILES=$(find ./output -type f \( -name "*.c" -o -name "*.h" \) | tr '\n' ',')
+          if [ -z "$DECOMPILED_FILES" ]; then
+            echo "Error: No decompiled files found in output directory."
+            exit 1
+          fi
+          echo "Decompiled files found: $DECOMPILED_FILES"
+          echo "decompiled_files=$DECOMPILED_FILES" >> $GITHUB_OUTPUT
+
+      - name: Create Draft Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: 'v-draft-${{ github.run_id }}'
+          name: ${{ inputs.release_name }} - Draft
+          body: "This is a draft release containing decompiled files from ${{ inputs.so_file_path }} using ${{ inputs.decompiler_choice }}. Please publish it manually."
+          artifacts: "${{ steps.find_decompiled_files.outputs.decompiled_files }}"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          draft: true
+
+      - name: Upload as Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: decompiled-files
+          path: |
+            output/*.c
+            output/*.h
