@@ -186,6 +186,7 @@ jobs:
 from ghidra.app.decompiler import DecompInterface
 from ghidra.util.task import ConsoleTaskMonitor
 import ghidra.program.model.listing
+
 def run():
     program = getCurrentProgram()
     decomp = DecompInterface()
@@ -202,7 +203,29 @@ EOF
           chmod +x decompile.py
           echo "Created Ghidra decompiler script: decompile.py"
 
-      - name: Run Ghidra Decompiler (Fallback)
+      - name: Debug Ghidra Script
+        run: |
+          echo "Content of decompile.py:"
+          cat decompile.py
+          echo "Verified Ghidra script creation."
+
+      - name: Create Angr Decompiler Script
+        run: |
+          cat > angr_decompile.py << 'EOF'
+#!/usr/bin/env python
+import angr
+
+project = angr.Project("/github/workspace/${{ inputs.so_file_path }}", auto_load_libs=False)
+cfg = project.analyses.CFGFast()
+with open("/github/workspace/output/out_angr.c", "w") as f:
+    for func in cfg.functions.values():
+        f.write(f"// Function at {func.addr}\n")
+        f.write(f"// Decompilation not fully supported in this fallback\n")
+EOF
+          chmod +x angr_decompile.py
+          echo "Created Angr decompiler script: angr_decompile.py"
+
+      - name: Run Decompiler (Fallback)
         run: |
           if [ "${{ inputs.decompiler_choice }}" = "decompile" ]; then
             echo "Warning: 'decompile' mode not supported in fallback, using ghidra instead."
@@ -214,7 +237,6 @@ EOF
             /usr/local/ghidra/ghidraRun --help
             /usr/local/ghidra/ghidraRun -noix -script decompile.py -process "${{ inputs.so_file_path }}"
           elif [ "$DECOMPILER" = "angr" ]; then
-            echo -e 'import angr\nproject = angr.Project("${{ inputs.so_file_path }}", auto_load_libs=False)\ncfg = project.analyses.CFGFast()\nwith open("output/out_angr.c", "w") as f:\n    for func in cfg.functions.values():\n        f.write(f"// Function at {func.addr}\\n")\n        f.write(f"// Decompilation not fully supported in this fallback\\n")' > angr_decompile.py
             python angr_decompile.py
           fi
           echo "Fallback decompilation completed."
